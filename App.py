@@ -11,7 +11,7 @@ st.set_page_config(
 
 # URL of your hosted backend API
 # For local testing: "http://127.0.0.1:8000"
-BACKEND_URL = "http://http://radioactiv.pythonanywhere.com/"
+BACKEND_URL = "https://agrosmartz.streamlit.app/"
 
 # --- Custom CSS for Gradient Background ---
 st.markdown(
