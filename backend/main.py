@@ -1,156 +1,153 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
-import uvicorn
+from sqlalchemy import create_engine, Column, Integer, Float, DateTime, Boolean, String, inspect
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
-import time
 
-app = FastAPI(title="AgroSmart Backend", description="Backend for AgroSmart IoT Farm Management", version="1.0.0")
+# --- 1. DATABASE SETUP ---
+# This will create a farm_data.db file in Render's persistent disk storage.
+DATABASE_URL = "sqlite:///./farm_data.db"
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
-# CORS Middleware to allow requests from Streamlit frontend (adjust origins as needed)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to your frontend URL, e.g., ["https://your-streamlit-app.streamlit.app"]
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# --- 2. DATABASE MODELS ---
+# Stores the configuration and state for each zone.
+class Zone(Base):
+    __tablename__ = "zones"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True)
+    crop = Column(String, default="Unknown")
+    target_moisture = Column(Float, default=55.0)
+    manual_water_pending = Column(Boolean, default=False)
 
-# In-memory storage for zone data (use a database like SQLite for persistence in production)
-zone_data: Dict[str, Dict[str, Any]] = {
-    "1": {"temperature": 0, "humidity": 0, "soil_moisture": 0, "is_raining": False, "last_updated": None, "crop": "Ginger", "target_moisture": 55, "water_needed": False, "status": "Optimal", "manual_water_level": 0, "manual_water_pending": False},
-    "2": {"temperature": 0, "humidity": 0, "soil_moisture": 0, "is_raining": False, "last_updated": None, "crop": "Large Cardamom", "target_moisture": 55, "water_needed": False, "status": "Optimal", "manual_water_level": 0, "manual_water_pending": False},
-    "3": {"temperature": 0, "humidity": 0, "soil_moisture": 0, "is_raining": False, "last_updated": None, "crop": "Mandarin Orange", "target_moisture": 55, "water_needed": False, "status": "Optimal", "manual_water_level": 0, "manual_water_pending": False},
-    "4": {"temperature": 0, "humidity": 0, "soil_moisture": 0, "is_raining": False, "last_updated": None, "crop": "Ginger", "target_moisture": 55, "water_needed": False, "status": "Optimal", "manual_water_level": 0, "manual_water_pending": False},
-}
+# Stores every sensor reading received from the ESP32.
+class SensorReading(Base):
+    __tablename__ = "sensor_readings"
+    id = Column(Integer, primary_key=True, index=True)
+    zone_id = Column(Integer, index=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    temperature = Column(Float)
+    humidity = Column(Float)
+    soil_moisture = Column(Float)
+    is_raining = Column(Boolean)
 
-# Pydantic models for request/response validation
+# Create tables and initialize zones if they don't exist
+def setup_database():
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        inspector = inspect(engine)
+        if inspector.has_table("zones"):
+            for i in range(1, 5):
+                zone_name = f"Zone {i}"
+                exists = db.query(Zone).filter(Zone.name == zone_name).first()
+                if not exists:
+                    db.add(Zone(id=i, name=zone_name))
+            db.commit()
+    finally:
+        db.close()
+
+# --- 3. PYDANTIC MODELS (API Data Validation) ---
 class SensorData(BaseModel):
-    soil_moisture: float
     temperature: float
     humidity: float
+    soil_moisture: float
     is_raining: bool
-
-class WaterCommand(BaseModel):
-    amount: Optional[int] = 0  # Liters, for manual watering simulation
 
 class ZoneResponse(BaseModel):
     pump_on: bool
-    message: str = "OK"
+    message: str
 
-# Hardcoded crops per zone (can be made dynamic or from DB)
-CROPS = {
-    "1": "Ginger",
-    "2": "Large Cardamom",
-    "3": "Mandarin Orange",
-    "4": "Ginger",
-}
+# --- 4. FASTAPI APP ---
+app = FastAPI(title="AgroSmart API", version="1.1.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# Default target moisture (can be per crop or configurable)
-DEFAULT_TARGET_MOISTURE = 55
+# Setup the database on startup
+@app.on_event("startup")
+def on_startup():
+    setup_database()
 
-# --- ENDPOINTS ---
+# Dependency for getting a DB session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-@app.get("/zones")
-async def get_all_zones():
+# --- 5. API ENDPOINTS ---
+@app.post("/update/{zone_id}", response_model=ZoneResponse, tags=["ESP32"])
+def update_sensor_data(zone_id: int, data: SensorData, db: Session = Depends(get_db)):
     """
-    Endpoint for frontend to fetch all zone data.
-    Returns computed data including water_needed, status, etc.
+    Called by the ESP32 to post sensor data. Saves the data and responds
+    with a command on whether to turn the water pump on.
     """
-    computed_data = {}
-    for zone_id, data in zone_data.items():
-        zone_name = f"Zone {zone_id}"
-        computed_data[zone_name] = {
-            "temperature": data["temperature"],
-            "humidity": data["humidity"],
-            "soil_moisture": data["soil_moisture"],
-            "crop": data["crop"],
-            "target_moisture": data["target_moisture"],
-            "water_needed": data["water_needed"],
-            "status": data["status"],
-            "manual_water_level": data["manual_water_level"],
-            "last_updated": data["last_updated"],
-        }
-    return computed_data
-
-@app.post("/zones/{zone_id}", response_model=ZoneResponse)
-async def update_zone_data(zone_id: str, sensor_data: SensorData):
-    """
-    Endpoint for ESP32 to POST sensor data for a specific zone.
-    Computes if watering is needed and responds with pump_on decision.
-    """
-    if zone_id not in zone_data:
+    zone = db.query(Zone).filter(Zone.id == zone_id).first()
+    if not zone:
         raise HTTPException(status_code=404, detail="Zone not found")
 
-    # Update raw sensor data
-    zone_data[zone_id]["soil_moisture"] = sensor_data.soil_moisture
-    zone_data[zone_id]["temperature"] = sensor_data.temperature
-    zone_data[zone_id]["humidity"] = sensor_data.humidity
-    zone_data[zone_id]["is_raining"] = sensor_data.is_raining
-    zone_data[zone_id]["last_updated"] = datetime.now().isoformat()
+    db_reading = SensorReading(zone_id=zone_id, **data.dict())
+    db.add(db_reading)
 
-    # Set crop if not already set
-    if "crop" not in zone_data[zone_id] or not zone_data[zone_id]["crop"]:
-        zone_data[zone_id]["crop"] = CROPS.get(zone_id, "Unknown")
+    auto_water_needed = data.soil_moisture < zone.target_moisture and not data.is_raining
+    manual_water_requested = zone.manual_water_pending
+    pump_on = auto_water_needed or manual_water_requested
 
-    # Compute water needed: soil_moisture < target_moisture
-    target_moisture = zone_data[zone_id].get("target_moisture", DEFAULT_TARGET_MOISTURE)
-    water_needed = sensor_data.soil_moisture < target_moisture
-    zone_data[zone_id]["water_needed"] = water_needed
+    if manual_water_requested:
+        zone.manual_water_pending = False
 
-    # Compute status
-    zone_data[zone_id]["status"] = "Needs Attention" if water_needed else "Optimal"
+    db.commit()
+    return {"pump_on": pump_on, "message": "Data received"}
 
-    # Decide pump_on: auto (if water_needed and not raining) OR manual pending
-    auto_water = water_needed and not sensor_data.is_raining
-    manual_water = zone_data[zone_id].get("manual_water_pending", False)
-    pump_on = auto_water or manual_water
-
-    # If manual, reset the flag after responding
-    if manual_water:
-        zone_data[zone_id]["manual_water_pending"] = False
-
-    # Log for debugging (in production, use proper logging)
-    print(f"Zone {zone_id}: water_needed={water_needed}, raining={sensor_data.is_raining}, manual={manual_water}, pump_on={pump_on}")
-
-    return ZoneResponse(pump_on=pump_on, message=f"Zone {zone_id} updated")
-
-@app.post("/zones/{zone_id}/water")
-async def manual_water_zone(zone_id: str, command: WaterCommand):
+@app.post("/manual_water/{zone_id}", tags=["Frontend"])
+def request_manual_water(zone_id: int, db: Session = Depends(get_db)):
     """
-    Endpoint for frontend to trigger manual watering.
-    Sets a flag that the next ESP32 POST will honor by turning pump_on=true.
-    Updates manual_water_level.
+    Called by the frontend to trigger a manual watering cycle. Sets a flag
+    in the database that the ESP32 will act upon on its next update.
     """
-    if zone_id not in zone_data:
+    zone = db.query(Zone).filter(Zone.id == zone_id).first()
+    if not zone:
         raise HTTPException(status_code=404, detail="Zone not found")
 
-    zone_data[zone_id]["manual_water_level"] = command.amount
-    zone_data[zone_id]["manual_water_pending"] = True
-    zone_data[zone_id]["water_needed"] = True  # Force water_needed for display
-    zone_data[zone_id]["status"] = "Watering Requested"
+    zone.manual_water_pending = True
+    db.commit()
+    return {"message": f"Manual watering for {zone.name} is scheduled."}
 
-    print(f"Manual water request for Zone {zone_id}: {command.amount} liters")
-    return {"message": f"Manual watering requested for Zone {zone_id}. Next sensor sync will activate pump."}
+@app.get("/zones", tags=["Frontend"])
+def get_all_zones_status(db: Session = Depends(get_db)):
+    """
+    Called by the frontend to get the latest status of all zones.
+    """
+    zone_statuses = {}
+    zones = db.query(Zone).all()
+    for zone in zones:
+        latest_reading = db.query(SensorReading).filter(SensorReading.zone_id == zone.id).order_by(SensorReading.timestamp.desc()).first()
+        if latest_reading:
+            zone_statuses[zone.name] = {
+                "crop": zone.crop,
+                "target_moisture": zone.target_moisture,
+                "soil_moisture": latest_reading.soil_moisture,
+                "temperature": latest_reading.temperature,
+                "humidity": latest_reading.humidity,
+                "last_updated": latest_reading.timestamp.isoformat()
+            }
+        else:
+            # Provide default data if no readings exist for this zone yet
+            zone_statuses[zone.name] = {
+                "crop": zone.crop,
+                "target_moisture": zone.target_moisture,
+                "soil_moisture": 0,
+                "temperature": 0,
+                "humidity": 0,
+                "last_updated": "N/A"
+            }
+    return zone_statuses
 
-@app.get("/health")
-async def health_check():
-    """Simple health check endpoint."""
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+@app.get("/health", tags=["System"])
+def health_check():
+    """Simple health check endpoint to confirm the API is running."""
+    return {"status": "healthy"}
 
-# For development/testing, add a way to reset data
-@app.post("/reset")
-async def reset_data():
-    """Reset all zone data (for testing only)."""
-    global zone_data
-    zone_data = {
-        "1": {"temperature": 0, "humidity": 0, "soil_moisture": 0, "is_raining": False, "last_updated": None, "crop": "Ginger", "target_moisture": 55, "water_needed": False, "status": "Optimal", "manual_water_level": 0, "manual_water_pending": False},
-        "2": {"temperature": 0, "humidity": 0, "soil_moisture": 0, "is_raining": False, "last_updated": None, "crop": "Large Cardamom", "target_moisture": 55, "water_needed": False, "status": "Optimal", "manual_water_level": 0, "manual_water_pending": False},
-        "3": {"temperature": 0, "humidity": 0, "soil_moisture": 0, "is_raining": False, "last_updated": None, "crop": "Mandarin Orange", "target_moisture": 55, "water_needed": False, "status": "Optimal", "manual_water_level": 0, "manual_water_pending": False},
-        "4": {"temperature": 0, "humidity": 0, "soil_moisture": 0, "is_raining": False, "last_updated": None, "crop": "Ginger", "target_moisture": 55, "water_needed": False, "status": "Optimal", "manual_water_level": 0, "manual_water_pending": False},
-    }
-    return {"message": "Data reset"}
-
-if _name_ == "_main_":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
