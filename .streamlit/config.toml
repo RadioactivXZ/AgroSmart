@@ -1,0 +1,16 @@
+[theme]
+# The primary color for interactive elements
+primaryColor = "#2E7D32"  # A nice, dark green
+
+# Background color for the main content area
+backgroundColor = "#F0F4F0" # A very light, earthy green/gray
+
+# Background color for sidebar and other secondary areas
+secondaryBackgroundColor = "#E8F5E9" # A light green
+
+# Color of text
+textColor = "#263238"
+
+# Font family for the app
+# Options: "sans serif", "serif", or "monospace"
+font = "sans serif"
