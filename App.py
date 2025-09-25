@@ -1,170 +1,132 @@
 import streamlit as st
 import requests
 import time
+import random
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(
     page_title="AgroSmart Dashboard",
     page_icon="🌿",
     layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
 # URL of your hosted backend API
-# For local testing: "http://127.0.0.1:8000"
-BACKEND_URL = "https://agrosmartback.onrender.com/"
+BACKEND_URL = "https://agrosmartback.onrender.com" # Ensure no trailing slash
 
-# --- Custom CSS for Gradient Background ---
+# --- Custom CSS for Aesthetic Styling ---
+# (Your CSS remains the same)
 st.markdown(
     """
-    <style>
-    .stApp {
-        background: linear-gradient(to right, #eafaf3, #ffffff); /* Light green to white */
-    }
+    <style> 
+    ... 
     </style>
     """,
     unsafe_allow_html=True
 )
 
+
 # --- 2. SESSION STATE & DATA ---
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+
+if 'current_zone' not in st.session_state:
+    st.session_state.current_zone = "Zone 1"
+
 if 'zone_data' not in st.session_state:
-    st.session_state.zone_data = {
-        f"Zone {i}": {
-            'crop': 'Large Cardamom',
-            'target_moisture': 55,
-            'soil_moisture': 0, 'temperature': 0, 'humidity': 0,
-        } for i in range(1, 5)
-    }
+    # Initialize with empty data; it will be populated from the backend
+    st.session_state.zone_data = {}
 
-# EXPANDED CROP KNOWLEDGE WITH IMAGE URLs AND DESCRIPTIONS
-CROP_KNOWLEDGE = {
-    'Large Cardamom': {
-        'temp_range': (18, 28),
-        'humidity_range': (70, 85),
-        'description': "Large cardamom is a spice with a strong, aromatic, and smoky flavor. It thrives in humid, subtropical climates with well-drained soil and partial shade. It's often used in Indian and Nepalese cuisine.",
-        'image_url': "https://masalaboxco.com/cdn/shop/files/2_62858b80-ebe4-431e-9454-b103a07bb5ae.png?v=1702990394&width=1445"
-    },
-    'Ginger': {
-        'temp_range': (20, 30),
-        'humidity_range': (60, 75),
-        'description': "Ginger is a flowering plant whose rhizome (underground stem) is widely used as a spice and folk medicine. It prefers warm, humid climates with rich, moist soil. It's a versatile crop used in cooking, beverages, and traditional remedies.",
-        'image_url': "https://organicmandya.com/cdn/shop/files/Ginger.jpg?v=1757079802&width=1000"
-    },
-    'Mandarin Orange': {
-        'temp_range': (22, 32),
-        'humidity_range': (50, 70),
-        'description': "Mandarin oranges are small, sweet citrus fruits. They grow best in warm, sunny climates with well-drained soil. They are less cold-tolerant than other citrus and require consistent watering during fruit development.",
-        'image_url': "https://www.stylecraze.com/wp-content/uploads/2013/11/845_14-Amazing-Benefits-Of-Mandarin-Oranges-For-Skin-Hair-And-Health_shutterstock_116644108_1200px.jpg.webp"
-    },
-}
-CROP_OPTIONS = list(CROP_KNOWLEDGE.keys())
-
+# --- NEW: Data Fetching Function ---
 def fetch_data_from_backend():
     """Function to get the latest data from our FastAPI backend."""
     try:
-        response = requests.get(f"{BACKEND_URL}/zones")
-        response.raise_for_status()
-        data = response.json()
-        for zone_name, values in data.items():
-            # Update only the sensor-specific values
-            st.session_state.zone_data[zone_name]['soil_moisture'] = values.get('soil_moisture', 0)
-            st.session_state.zone_data[zone_name]['temperature'] = values.get('temperature', 0)
-            st.session_state.zone_data[zone_name]['humidity'] = values.get('humidity', 0)
-            # You might want to display 'last_updated' as well
+        # Note: Render free tier may spin down, so the first request might be slow.
+        # A timeout of 30 seconds is reasonable.
+        response = requests.get(f"{BACKEND_URL}/zones", timeout=30)
+        response.raise_for_status() # Raises an exception for bad status codes
+        live_data = response.json()
+        
+        # Update session state with the new live data and add missing keys if needed
+        for zone, data in live_data.items():
+            data.setdefault('target_moisture', 55)
+            data.setdefault('water_needed', data.get('soil_moisture', 0) < 55)
+            data.setdefault('status', 'Needs Attention' if data['water_needed'] else 'Optimal')
+            data.setdefault('manual_water_level', 0)
+        
+        st.session_state.zone_data = live_data
+        st.toast("✅ Live data synced!")
         return True
     except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching data: {e}", icon="🚨")
+        st.error(f"Could not connect to backend: {e}", icon="🚨")
         return False
 
-# --- 3. HEADER ---
-st.title("🌿 AgroSmart Live Dashboard")
-st.markdown("Monitor and control your farm's irrigation zones in real-time.")
+# (Your CROP_KNOWLEDGE dictionary remains the same)
+CROP_KNOWLEDGE = { ... }
 
-# --- 4. SIDEBAR SETTINGS ---
-with st.sidebar:
-    st.header("⚙️ Farm Settings")
-    st.subheader("Assign Crop to Each Zone")
-    for zone_name, data in st.session_state.zone_data.items():
-        data['crop'] = st.selectbox(f"Crop for {zone_name}", options=CROP_OPTIONS, key=f"select_{zone_name}")
+# --- 3. LOGIN PAGE ---
+def login_page():
+    # (Your login_page function remains the same)
+    st.markdown(...)
+    with st.form("login_form"):
+        phone = st.text_input("Phone Number", placeholder="Enter your phone number")
+        password = st.text_input("Password", type="password", placeholder="Enter your password")
+        submit = st.form_submit_button("Login", use_container_width=True)
+        if submit:
+            if phone and password:
+                st.session_state.logged_in = True
+                st.rerun()
+            else:
+                st.error("Please enter both phone number and password")
 
+# --- 4. MAIN DASHBOARD ---
+def main_dashboard():
+    # (Your main_dashboard function remains the same)
+    col1, col2, col3, col4, col5 = st.columns([2,1,1,1,1])
+    # ... navigation buttons ...
     st.markdown("---")
-    st.subheader("Set Target Soil Moisture")
-    for zone_name, data in st.session_state.zone_data.items():
-        data['target_moisture'] = st.slider(f"Target for {zone_name}", 0, 100, data['target_moisture'], key=f"target_{zone_name}")
     
-    st.markdown("---")
-    if st.button("🔄 Refresh Sensor Data", use_container_width=True):
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = "home"
+    
+    if st.session_state.current_page == "home":
+        home_page()
+    # ... other page routing ...
+
+# --- 5. HOME PAGE (with Refresh Button) ---
+def home_page():
+    if st.button("🔄 Sync with Live Sensors"):
         with st.spinner("Fetching latest data..."):
-            if fetch_data_from_backend():
-                st.toast("✅ Data refreshed!")
+            fetch_data_from_backend()
 
-# --- 5. MAIN DASHBOARD: IRRIGATION ZONES (UPDATED TO USE TABS) ---
-st.header("Irrigation Zone Overview")
+    st.markdown("<h2>Irrigation Zones</h2>", unsafe_allow_html=True)
+    
+    # Check if data has been loaded
+    if not st.session_state.zone_data:
+        st.warning("Sensor data not yet loaded. Click 'Sync' to fetch live data.")
+        return
 
-# Create tabs for each zone
-zone_tabs = st.tabs([f"🌿 Zone {i}" for i in range(1, 5)])
+    # ... The rest of your home_page function remains the same, but it will now use live data ...
+    # (zone selector, progress bars, etc.)
 
-for i, tab in enumerate(zone_tabs):
-    with tab:
-        zone_name = f"Zone {i+1}"
-        data = st.session_state.zone_data[zone_name]
+# (The rest of your page functions: crops_page, notifications_page, profile_page remain the same)
+def crops_page():
+    # ...
+def notifications_page():
+    # ...
+def profile_page():
+    # ...
 
-        # Display crop details for the selected zone
-        st.markdown(f"### Current Crop: {data['crop']}")
-        st.markdown(f"**Target Soil Moisture:** {data['target_moisture']}%")
+# (JavaScript section can be removed, see pro-tip below)
 
-        # Use a container with a border to create a "card" for sensor status
-        with st.container(border=True):
-            st.markdown("#### Live Sensor Status")
-            col1, col2, col3 = st.columns(3)
-            # Ensure proper handling of missing data from backend (e.g., during initial load)
-            col1.metric("🌡️ Temperature", f"{data.get('temperature', 0):.1f}°C")
-            col2.metric("💧 Humidity", f"{data.get('humidity', 0):.1f}%")
-            col3.metric("🌱 Soil Moisture", f"{data.get('soil_moisture', 0):.1f}%")
+# --- 10. MAIN APP LOGIC (with Backend Call) ---
+if not st.session_state.logged_in:
+    login_page()
+else:
+    # On first load after login, fetch live data
+    if 'initial_load' not in st.session_state:
+        with st.spinner("Connecting to farm sensors..."):
+            fetch_data_from_backend()
+        st.session_state.initial_load = True
 
-        # Create another card for watering controls
-        with st.container(border=True):
-            st.markdown("#### Watering Controls")
-            c1, c2 = st.columns(2)
-            with c1:
-                # Placeholder for manual watering button - implement actual API call
-                if st.button("💧 Water Manually", key=f"manual_water_{zone_name}", use_container_width=True):
-                    st.warning("Manual watering functionality not fully implemented yet!", icon="⚠️")
-                    st.success(f"Simulating manual watering command for {zone_name}!")
-            with c2:
-                # Placeholder for smart watering button
-                if st.button("🤖 Smart Water", key=f"smart_water_{zone_name}", use_container_width=True):
-                    if data.get('soil_moisture', 0) < data['target_moisture']:
-                        st.success(f"Smart Water ON: System will manage watering for {zone_name}.")
-                    else:
-                        st.info(f"Smart Water OFF: Soil moisture is optimal for {zone_name}.")
-
-# --- 6. CROP KNOWLEDGE BASE (UPDATED WITH IMAGE AND DESCRIPTION) ---
-st.markdown("---")
-st.header("📚 Crop Knowledge Base")
-selected_crop = st.selectbox("Select a crop to learn more:", options=CROP_OPTIONS, index=None, placeholder="Choose a crop...", key="crop_kb_select")
-
-if selected_crop:
-    info = CROP_KNOWLEDGE[selected_crop]
-    st.subheader(f"Information for {selected_crop}")
-
-    col_img, col_text = st.columns([1, 2]) # Image takes 1/3, text takes 2/3 width
-
-    with col_img:
-        st.image(info['image_url'], caption=selected_crop, use_container_width=True)
-
-    with col_text:
-        st.write(f"**Ideal Temperature Range:** {info['temp_range'][0]}°C - {info['temp_range'][1]}°C")
-        st.write(f"**Ideal Humidity Range:** {info['humidity_range'][0]}% - {info['humidity_range'][1]}%")
-        st.write("---")
-        st.markdown(f"**Description:** {info['description']}")
-
-
-# --- Initial Data Fetch on App Load ---
-if 'initial_load' not in st.session_state:
-    with st.spinner("Connecting to farm sensors..."):
-        if fetch_data_from_backend():
-            st.toast("✅ Initial data loaded!")
-        else:
-            st.error("❌ Failed to load initial data.")
-    st.session_state.initial_load = True
-    st.rerun() # Rerun to display the fetched data
+    main_dashboard()
