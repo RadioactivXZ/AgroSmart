@@ -48,7 +48,7 @@ if 'zone_configs' not in st.session_state:
 if 'daily_water' not in st.session_state or st.session_state.daily_water.get('date') != date.today():
     st.session_state.daily_water = {"date": date.today(), **{f"Zone {i}": 0 for i in range(1, 5)}}
 
-# --- 3. DETAILED CROP KNOWLEDGE BASE ---
+# --- 3. DETAILED CROP KNOWLEDGE BASE (WITH CORRECTED IMAGE URLS) ---
 CROP_KNOWLEDGE = {
     'Large Cardamom': {
         'daily_water_limit_L': 20, 'temp_range': (18, 28), 'humidity_range': (70, 85),
@@ -60,19 +60,18 @@ CROP_KNOWLEDGE = {
         'daily_water_limit_L': 15, 'temp_range': (20, 30), 'humidity_range': (60, 75),
         'soil_type': 'Rich, loamy, well-drained soil',
         'description': "A flowering plant whose rhizome is widely used as a spice. It prefers warm, humid climates with rich, moist soil.",
-        'image_url': "https://www.nature-and-garden.com/wp-content/uploads/2021/05/ginger-planting.jpg"
+        'image_url': "https://upload.wikimedia.org/wikipedia/commons/a/a7/Ginger_root.jpg" # Corrected URL
     },
     'Mandarin Orange': {
         'daily_water_limit_L': 25, 'temp_range': (22, 32), 'humidity_range': (50, 70),
         'soil_type': 'Well-drained, slightly acidic soil',
         'description': "Small, sweet citrus fruits that grow best in warm, sunny climates and require consistent watering during fruit development.",
-        'image_url': "https://www.gardeningknowhow.com/wp-content/uploads/2023/04/mandarin-oranges-on-a-tree.jpg"
+        'image_url': "https://upload.wikimedia.org/wikipedia/commons/thumb/1/14/Mandarins_tangerines.jpg/1280px-Mandarins_tangerines.jpg" # Corrected URL
     }
 }
 
 # --- 4. SIDEBAR WITH AUTOSAVE ---
 def update_config(zone_key):
-    """Callback function to autosave sidebar changes."""
     config = st.session_state.zone_configs[zone_key]
     config['crop'] = st.session_state[f"crop_{zone_key}"]
     config['target_moisture'] = st.session_state[f"moisture_{zone_key}"]
@@ -97,11 +96,13 @@ def dashboard_page():
     crop_name = zone_config["crop"]
     crop_info = CROP_KNOWLEDGE[crop_name]
     st.markdown(f"<h2>📍 {st.session_state.selected_zone}: <span style='color:#2E8B57;'>{crop_name}</span></h2>", unsafe_allow_html=True)
+    
     col1, col2 = st.columns([2, 1])
     with col1:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("📊 Live Sensor Readings")
-        if not zone_data: st.warning("Awaiting live sensor data...")
+        if not zone_data:
+            st.warning("Awaiting live sensor data...")
         else:
             m_cols = st.columns(4)
             m_cols[0].metric("🌡️ Temperature", f"{zone_data.get('temperature', 0):.1f} °C")
@@ -109,34 +110,37 @@ def dashboard_page():
             m_cols[2].metric("🌱 Soil Moisture", f"{zone_data.get('soil_moisture', 0):.1f} %")
             m_cols[3].metric("☀️ Weather", "Raining" if zone_data.get('is_raining') else "Clear")
         st.markdown('</div>', unsafe_allow_html=True)
-    with col2:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.subheader("💧 Watering Control")
-        limit = crop_info['daily_water_limit_L']; given = st.session_state.daily_water[st.session_state.selected_zone]
-        remaining = max(0, limit - given)
-        st.progress(given / limit if limit else 0, text=f"{given:.1f} / {limit} L used today")
-        
-        if remaining <= 0:
-            st.success("✅ Daily water limit reached.")
-        else:
-            btn_cols = st.columns(2)
-            if btn_cols[0].button("Auto", use_container_width=True, type="primary" if st.session_state.watering_mode == "Auto" else "secondary"): st.session_state.watering_mode = "Auto"
-            if btn_cols[1].button("Manual", use_container_width=True, type="primary" if st.session_state.watering_mode == "Manual" else "secondary"): st.session_state.watering_mode = "Manual"
-
-            amount = 0
-            if st.session_state.watering_mode == "Manual":
-                amount = st.number_input("Amount (L)", 0.0, remaining, min(1.0, remaining), 0.5)
+    
+    # --- ERROR FIX: Only show watering control if live data is available ---
+    if zone_data:
+        with col2:
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.subheader("💧 Watering Control")
+            limit = crop_info['daily_water_limit_L']; given = st.session_state.daily_water[st.session_state.selected_zone]
+            remaining = max(0, limit - given)
+            st.progress(given / limit if limit else 0, text=f"{given:.1f} / {limit} L used today")
+            
+            if remaining <= 0:
+                st.success("✅ Daily water limit reached.")
             else:
-                target = zone_config['target_moisture']
-                current = zone_data.get('soil_moisture', target) if zone_data else target
-                auto_amount = round(max(0, target - current) * 0.5, 1)
-                amount = min(auto_amount, remaining)
-                st.info(f"Auto-Calculated: {amount} L")
+                btn_cols = st.columns(2)
+                if btn_cols[0].button("Auto", use_container_width=True, type="primary" if st.session_state.watering_mode == "Auto" else "secondary"): st.session_state.watering_mode = "Auto"
+                if btn_cols[1].button("Manual", use_container_width=True, type="primary" if st.session_state.watering_mode == "Manual" else "secondary"): st.session_state.watering_mode = "Manual"
 
-            if st.button("💦 Water Now", use_container_width=True, disabled=(amount<=0)):
-                st.session_state.daily_water[st.session_state.selected_zone] += amount
-                st.success(f"Watered with {amount} L."); time.sleep(1); st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+                amount = 0
+                if st.session_state.watering_mode == "Manual":
+                    amount = st.number_input("Amount (L)", 0.0, remaining, min(1.0, remaining), 0.5)
+                else:
+                    target = zone_config['target_moisture']
+                    current = zone_data.get('soil_moisture', target)
+                    auto_amount = round(max(0, target - current) * 0.5, 1)
+                    amount = min(auto_amount, remaining)
+                    st.info(f"Auto-Calculated: {amount} L")
+
+                if st.button("💦 Water Now", use_container_width=True, disabled=(amount<=0)):
+                    st.session_state.daily_water[st.session_state.selected_zone] += amount
+                    st.success(f"Watered with {amount} L."); time.sleep(1); st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
 
 def crops_page():
     st.header("📚 Crop Knowledge Base")
