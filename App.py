@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 # URL of your hosted backend API
-BACKEND_URL = "https://agrosmartback.onrender.com"
+BACKEND_URL = "https://agrosmart-flask-backend.onrender.com/"
 
 # --- Custom CSS for Aesthetic Styling ---
 st.markdown(
