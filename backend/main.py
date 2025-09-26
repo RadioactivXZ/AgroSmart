@@ -1,165 +1,238 @@
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, Float, DateTime, Boolean, String, inspect
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.ext.declarative import declarative_base
-from datetime import datetime
-import os # Used to read environment variables
+from flask import Flask, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime, timedelta
+import json
+import os
 
-# --- 1. DATABASE SETUP ---
-# Reads the secure database connection string from an environment variable.
-# This is the standard practice for production applications.
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./default_local.db")
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+app = Flask(_name_)
 
-# --- 2. DATABASE MODELS ---
-# Defines the structure of the 'zones' table.
-class Zone(Base):
-    __tablename__ = "zones"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, index=True)
-    crop = Column(String, default="Unknown")
-    target_moisture = Column(Float, default=55.0)
-    manual_water_pending = Column(Boolean, default=False)
+# Database configuration
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///agrosmart.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Defines the structure of the 'sensor_readings' table.
-class SensorReading(Base):
-    __tablename__ = "sensor_readings"
-    id = Column(Integer, primary_key=True, index=True)
-    zone_id = Column(Integer, index=True)
-    timestamp = Column(DateTime, default=datetime.utcnow)
-    temperature = Column(Float)
-    humidity = Column(Float)
-    soil_moisture = Column(Float)
-    is_raining = Column(Boolean)
+db = SQLAlchemy(app)
 
-# --- Function to initialize the database ---
-def setup_database():
-    Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
+# Database Models
+class SensorData(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    zone_id = db.Column(db.Integer, nullable=False)
+    soil_moisture = db.Column(db.Float, nullable=False)
+    temperature = db.Column(db.Float, nullable=False)
+    humidity = db.Column(db.Float, nullable=False)
+    is_raining = db.Column(db.Boolean, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    pump_activated = db.Column(db.Boolean, default=False)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'zone_id': self.zone_id,
+            'soil_moisture': self.soil_moisture,
+            'temperature': self.temperature,
+            'humidity': self.humidity,
+            'is_raining': self.is_raining,
+            'timestamp': self.timestamp.isoformat(),
+            'pump_activated': self.pump_activated
+        }
+
+class PumpControl(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    zone_id = db.Column(db.Integer, nullable=False)
+    is_active = db.Column(db.Boolean, default=False)
+    last_activated = db.Column(db.DateTime)
+    auto_mode = db.Column(db.Boolean, default=True)
+
+    def to_dict(self):
+        return {
+            'zone_id': self.zone_id,
+            'is_active': self.is_active,
+            'last_activated': self.last_activated.isoformat() if self.last_activated else None,
+            'auto_mode': self.auto_mode
+        }
+
+# Initialize database
+with app.app_context():
+    db.create_all()
+
+# API Routes
+
+@app.route('/<int:zone_id>', methods=['POST'])
+def receive_sensor_data(zone_id):
+    """Receive sensor data from ESP32 and return pump control decision"""
     try:
-        # Check if zones have been created, if not, create them.
-        inspector = inspect(engine)
-        if inspector.has_table("zones"):
-            for i in range(1, 5):
-                zone_name = f"Zone {i}"
-                exists = db.query(Zone).filter(Zone.name == zone_name).first()
-                if not exists:
-                    db.add(Zone(id=i, name=zone_name))
-            db.commit()
-    finally:
-        db.close()
-
-# --- 3. PYDANTIC MODELS (API Data Validation) ---
-class SensorData(BaseModel):
-    temperature: float
-    humidity: float
-    soil_moisture: float
-    is_raining: bool
-
-class ZoneResponse(BaseModel):
-    pump_on: bool
-    message: str
-
-# --- 4. FASTAPI APP INITIALIZATION ---
-app = FastAPI(title="AgroSmart API", version="1.2.0")
-
-# Add CORS middleware to allow the frontend to communicate with this API
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], # In production, you would restrict this to your Streamlit app's URL
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Run the database setup function when the application starts
-@app.on_event("startup")
-def on_startup():
-    setup_database()
-
-# Dependency function to get a database session for each API request
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-# --- 5. API ENDPOINTS ---
-@app.post("/update/{zone_id}", response_model=ZoneResponse, tags=["ESP32"])
-def update_sensor_data(zone_id: int, data: SensorData, db: Session = Depends(get_db)):
-    """
-    Receives sensor data from the ESP32, saves it, and decides if the pump should be turned on.
-    """
-    zone = db.query(Zone).filter(Zone.id == zone_id).first()
-    if not zone:
-        raise HTTPException(status_code=404, detail="Zone not found")
-
-    # Create and save the new sensor reading
-    db_reading = SensorReading(zone_id=zone_id, **data.dict())
-    db.add(db_reading)
-
-    # Determine if the pump should be on
-    auto_water_needed = data.soil_moisture < zone.target_moisture and not data.is_raining
-    manual_water_requested = zone.manual_water_pending
-    pump_on = auto_water_needed or manual_water_requested
-
-    # If this was a manual request, reset the flag
-    if manual_water_requested:
-        zone.manual_water_pending = False
-
-    db.commit()
-    return {"pump_on": pump_on, "message": "Data received and processed"}
-
-@app.post("/manual_water/{zone_id}", tags=["Frontend"])
-def request_manual_water(zone_id: int, db: Session = Depends(get_db)):
-    """
-    Receives a manual watering request from the frontend and sets a flag in the database.
-    """
-    zone = db.query(Zone).filter(Zone.id == zone_id).first()
-    if not zone:
-        raise HTTPException(status_code=404, detail="Zone not found")
-
-    zone.manual_water_pending = True
-    db.commit()
-    return {"message": f"Manual watering for {zone.name} has been scheduled."}
-
-@app.get("/zones", tags=["Frontend"])
-def get_all_zones_status(db: Session = Depends(get_db)):
-    """
-    Provides the latest sensor data and configuration for all zones to the frontend.
-    """
-    zone_statuses = {}
-    zones = db.query(Zone).all()
-    for zone in zones:
-        latest_reading = db.query(SensorReading).filter(SensorReading.zone_id == zone.id).order_by(SensorReading.timestamp.desc()).first()
-
-        if latest_reading:
-            zone_statuses[zone.name] = {
-                "crop": zone.crop,
-                "target_moisture": zone.target_moisture,
-                "soil_moisture": latest_reading.soil_moisture,
-                "temperature": latest_reading.temperature,
-                "humidity": latest_reading.humidity,
-                "last_updated": latest_reading.timestamp.isoformat()
-            }
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['soil_moisture', 'temperature', 'humidity', 'is_raining']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Missing field: {field}'}), 400
+        
+        # Store sensor data
+        sensor_data = SensorData(
+            zone_id=zone_id,
+            soil_moisture=data['soil_moisture'],
+            temperature=data['temperature'],
+            humidity=data['humidity'],
+            is_raining=data['is_raining']
+        )
+        
+        # Determine if pump should be activated
+        pump_decision = determine_pump_activation(zone_id, data)
+        sensor_data.pump_activated = pump_decision
+        
+        db.session.add(sensor_data)
+        db.session.commit()
+        
+        # Update pump control status
+        pump_control = PumpControl.query.filter_by(zone_id=zone_id).first()
+        if not pump_control:
+            pump_control = PumpControl(zone_id=zone_id)
+            db.session.add(pump_control)
+        
+        if pump_decision:
+            pump_control.is_active = True
+            pump_control.last_activated = datetime.utcnow()
         else:
-            # Provide default data if no readings exist for this zone yet
-            zone_statuses[zone.name] = {
-                "crop": zone.crop,
-                "target_moisture": zone.target_moisture,
-                "soil_moisture": 0,
-                "temperature": 0,
-                "humidity": 0,
-                "last_updated": "N/A"
-            }
-    return zone_statuses
+            pump_control.is_active = False
+            
+        db.session.commit()
+        
+        return jsonify({
+            'pump_on': pump_decision,
+            'message': f'Data received for zone {zone_id}'
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-@app.get("/health", tags=["System"])
+def determine_pump_activation(zone_id, data):
+    """Simple logic to determine if pump should be activated"""
+    soil_moisture = data['soil_moisture']
+    temperature = data['temperature']
+    humidity = data['humidity']
+    is_raining = data['is_raining']
+    
+    # Don't water if it's raining
+    if is_raining:
+        return False
+    
+    # Don't water if soil is already moist (adjust threshold as needed)
+    if soil_moisture > 60:
+        return False
+    
+    # Water if soil is dry and temperature is not too high
+    if soil_moisture < 30 and temperature < 40:
+        return True
+    
+    # Water if soil is very dry regardless of temperature
+    if soil_moisture < 20:
+        return True
+    
+    return False
+
+@app.route('/api/data', methods=['GET'])
+def get_sensor_data():
+    """Get latest sensor data for all zones"""
+    try:
+        # Get latest data for each zone
+        zones_data = {}
+        for zone_id in range(1, 5):  # Zones 1-4
+            latest_data = SensorData.query.filter_by(zone_id=zone_id)\
+                .order_by(SensorData.timestamp.desc()).first()
+            if latest_data:
+                zones_data[f'zone_{zone_id}'] = latest_data.to_dict()
+        
+        return jsonify(zones_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/data/<int:zone_id>', methods=['GET'])
+def get_zone_data(zone_id):
+    """Get sensor data for a specific zone"""
+    try:
+        # Get data from last 24 hours
+        since = datetime.utcnow() - timedelta(hours=24)
+        data = SensorData.query.filter(
+            SensorData.zone_id == zone_id,
+            SensorData.timestamp >= since
+        ).order_by(SensorData.timestamp.desc()).all()
+        
+        return jsonify([record.to_dict() for record in data])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/pump/<int:zone_id>', methods=['POST'])
+def manual_pump_control(zone_id):
+    """Manual pump control (for testing or manual override)"""
+    try:
+        data = request.get_json()
+        action = data.get('action')  # 'on' or 'off'
+        
+        pump_control = PumpControl.query.filter_by(zone_id=zone_id).first()
+        if not pump_control:
+            pump_control = PumpControl(zone_id=zone_id)
+            db.session.add(pump_control)
+        
+        if action == 'on':
+            pump_control.is_active = True
+            pump_control.last_activated = datetime.utcnow()
+            pump_control.auto_mode = False
+        elif action == 'off':
+            pump_control.is_active = False
+            pump_control.auto_mode = False
+        
+        db.session.commit()
+        
+        return jsonify({
+            'zone_id': zone_id,
+            'pump_on': pump_control.is_active,
+            'auto_mode': pump_control.auto_mode
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/status', methods=['GET'])
+def get_system_status():
+    """Get overall system status"""
+    try:
+        # Get pump status for all zones
+        pump_status = {}
+        for zone_id in range(1, 5):
+            pump_control = PumpControl.query.filter_by(zone_id=zone_id).first()
+            if pump_control:
+                pump_status[f'zone_{zone_id}'] = pump_control.to_dict()
+        
+        # Get latest sensor readings
+        latest_readings = {}
+        for zone_id in range(1, 5):
+            latest = SensorData.query.filter_by(zone_id=zone_id)\
+                .order_by(SensorData.timestamp.desc()).first()
+            if latest:
+                latest_readings[f'zone_{zone_id}'] = {
+                    'soil_moisture': latest.soil_moisture,
+                    'temperature': latest.temperature,
+                    'humidity': latest.humidity,
+                    'is_raining': latest.is_raining,
+                    'timestamp': latest.timestamp.isoformat()
+                }
+        
+        return jsonify({
+            'pump_status': pump_status,
+            'latest_readings': latest_readings,
+            'system_time': datetime.utcnow().isoformat()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/', methods=['GET'])
 def health_check():
-    """A simple endpoint that Render can use to check if the app is live."""
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'message': 'AgroSmart Backend is running',
+        'timestamp': datetime.utcnow().isoformat()
+    })
+
+if _name_ == '_main_':
+    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
