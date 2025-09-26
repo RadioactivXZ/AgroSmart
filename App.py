@@ -9,10 +9,12 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- IMPORTANT: Set this to your deployed Flask backend URL ---
-BACKEND_URL = "https://agrosmartback.onrender.com/api/data"
+# --- ❗️ THIS IS THE CORRECTED URL ❗️ ---
+BACKEND_URL = "https://agrosmart-flask-backend.onrender.com/api/data"
+
 
 # --- 2. DATA FETCHING ---
+@st.cache_data(ttl=30) # Cache data for 30 seconds
 def fetch_data_from_backend():
     """Fetches the latest sensor data from the Flask backend."""
     try:
@@ -20,92 +22,107 @@ def fetch_data_from_backend():
         if response.status_code == 200:
             return response.json()
         else:
+            # This toast will now show the correct error code if something else goes wrong
             st.toast(f"Error from backend: Status Code {response.status_code}", icon="⚠️")
             return None
-    except requests.exceptions.RequestException as e:
-        st.toast(f"Failed to connect to backend: {e}", icon="❌")
+    except requests.exceptions.RequestException:
+        st.toast(f"Could not connect to backend. Please check the URL.", icon="❌")
         return None
 
-# --- 3. SESSION STATE INITIALIZATION ---
-if 'zone_data' not in st.session_state:
-    st.session_state.zone_data = {} # Start with empty data
+# --- 3. SESSION STATE ---
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = "Home"
 
-# --- 4. CROP KNOWLEDGE BASE ---
+# --- 4. STATIC DATA (for other pages) ---
 CROP_KNOWLEDGE = {
     'Large Cardamom': {
         'temp_range': (18, 28), 'humidity_range': (70, 85),
+        'description': "A spice with a strong, aromatic flavor thriving in humid climates.",
         'image_url': "https://masalaboxco.com/cdn/shop/files/2_62858b80-ebe4-431e-9454-b103a07bb5ae.png?v=1702990394"
     },
     'Ginger': {
         'temp_range': (20, 30), 'humidity_range': (60, 75),
+        'description': "A flowering plant whose rhizome is widely used as a spice.",
         'image_url': "https://www.nature-and-garden.com/wp-content/uploads/2021/05/ginger-planting.jpg"
     },
     'Mandarin Orange': {
         'temp_range': (22, 32), 'humidity_range': (50, 70),
+        'description': "Small, sweet citrus fruits that grow best in warm, sunny climates.",
         'image_url': "https://www.gardeningknowhow.com/wp-content/uploads/2023/04/mandarin-oranges-on-a-tree.jpg"
-    },
-    # Default values for when a crop is not assigned
-    'Unknown': {
-        'temp_range': (0, 100), 'humidity_range': (0, 100), 'image_url': None
     }
 }
 
-# --- 5. UI COMPONENTS ---
+# --- 5. UI PAGES ---
 def home_page():
     st.header("🌿 Real-Time Farm Status")
     
-    if not st.session_state.zone_data:
-        st.warning("Awaiting first data transmission from sensors. Please wait...")
-        st.info("If this message persists, please check if your ESP32 sensors are online and the backend is running.")
+    # Data fetching is isolated to this page
+    zone_data = fetch_data_from_backend()
+
+    if not zone_data:
+        st.warning("Awaiting data from the backend. This could be due to the backend service starting up (it can take a minute on Render) or no sensor data being sent yet.")
+        st.info("The dashboard will update automatically. Other pages are still accessible via the sidebar.")
         return
 
-    # Dynamically create columns for each zone found in the data
-    zones = sorted(st.session_state.zone_data.keys())
+    zones = sorted(zone_data.keys())
     cols = st.columns(len(zones) or 1)
 
     for i, zone_name in enumerate(zones):
-        zone_info = st.session_state.zone_data[zone_name]
+        zone_info = zone_data[zone_name]
         with cols[i]:
             st.subheader(zone_name)
             st.metric("🌡️ Temperature", f"{zone_info.get('temperature', 0):.1f} °C")
             st.metric("💧 Humidity", f"{zone_info.get('humidity', 0):.1f} %")
             st.metric("🌱 Soil Moisture", f"{zone_info.get('soil_moisture', 0):.1f} %")
-            
-            rain_status = "Raining" if zone_info.get('is_raining') else "Clear"
-            pump_status = "ON" if zone_info.get('pump_activated') else "OFF"
-            
-            st.info(f"Weather: {rain_status} 🌧️" if rain_status == "Raining" else f"Weather: {rain_status} ☀️")
-            st.success(f"Pump: {pump_status} 🟢" if pump_status == "ON" else f"Pump: {pump_status} 🔴")
-            
-            # Display last update time
-            timestamp = zone_info.get('timestamp')
-            if timestamp:
-                st.caption(f"Last updated: {timestamp}")
+            rain_status = "Raining 🌧️" if zone_info.get('is_raining') else "Clear ☀️"
+            st.metric("Weather", rain_status)
 
-# --- 6. MAIN APP LOGIC ---
+def crops_page():
+    st.header("🌱 Crop Knowledge Base")
+    selected_crop = st.selectbox("Select a crop", options=CROP_KNOWLEDGE.keys())
+    
+    if selected_crop:
+        info = CROP_KNOWLEDGE[selected_crop]
+        col1, col2 = st.columns([1, 2])
+        if info.get('image_url'):
+            col1.image(info['image_url'], caption=selected_crop)
+        col2.subheader(f"Ideal Conditions for {selected_crop}")
+        col2.write(f"**Temperature:** {info['temp_range'][0]}°C - {info['temp_range'][1]}°C")
+        col2.write(f"**Humidity:** {info['humidity_range'][0]}% - {info['humidity_range'][1]}%")
+        col2.write(f"**Description:** {info['description']}")
+
+def profile_page():
+    st.header("👤 Farmer Profile")
+    st.write("Name: Rajesh Kumar")
+    st.write("Location: Sikkim, India")
+
+# --- 6. MAIN APP LAYOUT ---
 st.title("AgroSmart Monitoring Dashboard")
 
-# --- Sidebar for Refresh Control ---
+# --- Sidebar for Navigation and Controls ---
 with st.sidebar:
+    st.header("Navigation")
+    if st.button("🏠 Home", use_container_width=True):
+        st.session_state.current_page = "Home"
+    if st.button("🌱 Crops", use_container_width=True):
+        st.session_state.current_page = "Crops"
+    if st.button("👤 Profile", use_container_width=True):
+        st.session_state.current_page = "Profile"
+    
+    st.divider()
     st.header("Controls")
-    if st.button("🔄 Refresh Data Now"):
-        new_data = fetch_data_from_backend()
-        if new_data:
-            st.session_state.zone_data = new_data
-        st.rerun()
-
-    auto_refresh = st.toggle("Auto-refresh every 30s", value=True)
+    auto_refresh = st.toggle("Auto-refresh Home page", value=True)
 
 
-# Fetch new data and update session state
-new_data = fetch_data_from_backend()
-if new_data:
-    st.session_state.zone_data = new_data
+# --- Page Router ---
+if st.session_state.current_page == "Home":
+    home_page()
+elif st.session_state.current_page == "Crops":
+    crops_page()
+elif st.session_state.current_page == "Profile":
+    profile_page()
 
-# Display the main page
-home_page()
-
-# Logic for auto-refresh
-if auto_refresh:
+# --- Auto-refresh logic (only for home page) ---
+if st.session_state.current_page == "Home" and auto_refresh:
     time.sleep(30)
     st.rerun()
