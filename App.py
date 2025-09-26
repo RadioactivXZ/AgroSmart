@@ -16,7 +16,7 @@ st.markdown("""
     html, body, [class*="st-"] { font-family: 'Poppins', sans-serif; }
     .stApp { background-color: #F0F2F6; }
     .main-header {
-        font-size: 2.5rem; font-weight: 700; text-align: left;
+        font-size: 3rem; font-weight: 700; text-align: center; padding: 1rem 0;
         background: -webkit-linear-gradient(45deg, #006400, #55a630);
         -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     }
@@ -48,7 +48,7 @@ if 'zone_configs' not in st.session_state:
 if 'daily_water' not in st.session_state or st.session_state.daily_water.get('date') != date.today():
     st.session_state.daily_water = {"date": date.today(), **{f"Zone {i}": 0 for i in range(1, 5)}}
 
-# --- 3. DETAILED CROP KNOWLEDGE BASE (WITH CORRECTED IMAGE URLS) ---
+# --- 3. DETAILED CROP KNOWLEDGE BASE ---
 CROP_KNOWLEDGE = {
     'Large Cardamom': {
         'daily_water_limit_L': 20, 'temp_range': (18, 28), 'humidity_range': (70, 85),
@@ -60,13 +60,13 @@ CROP_KNOWLEDGE = {
         'daily_water_limit_L': 15, 'temp_range': (20, 30), 'humidity_range': (60, 75),
         'soil_type': 'Rich, loamy, well-drained soil',
         'description': "A flowering plant whose rhizome is widely used as a spice. It prefers warm, humid climates with rich, moist soil.",
-        'image_url': "https://upload.wikimedia.org/wikipedia/commons/a/a7/Ginger_root.jpg" # Corrected URL
+        'image_url': "https://upload.wikimedia.org/wikipedia/commons/a/a7/Ginger_root.jpg"
     },
     'Mandarin Orange': {
         'daily_water_limit_L': 25, 'temp_range': (22, 32), 'humidity_range': (50, 70),
         'soil_type': 'Well-drained, slightly acidic soil',
         'description': "Small, sweet citrus fruits that grow best in warm, sunny climates and require consistent watering during fruit development.",
-        'image_url': "https://upload.wikimedia.org/wikipedia/commons/thumb/1/14/Mandarins_tangerines.jpg/1280px-Mandarins_tangerines.jpg" # Corrected URL
+        'image_url': "https://upload.wikimedia.org/wikipedia/commons/thumb/1/14/Mandarins_tangerines.jpg/1280px-Mandarins_tangerines.jpg"
     }
 }
 
@@ -88,8 +88,18 @@ with st.sidebar:
 
 # --- 5. UI PAGES ---
 def dashboard_page():
-    st.session_state.selected_zone = st.radio("Select Zone", [f"Zone {i}" for i in range(1, 5)], horizontal=True)
+    # --- Zone Selector Buttons ---
+    st.subheader("Select a Zone to View")
+    zone_cols = st.columns(4)
+    zones = [f"Zone {i}" for i in range(1, 5)]
+    for i, zone in enumerate(zones):
+        button_type = "primary" if st.session_state.selected_zone == zone else "secondary"
+        if zone_cols[i].button(zone, use_container_width=True, type=button_type):
+            st.session_state.selected_zone = zone
+            st.rerun()
+    
     st.markdown("---")
+    
     live_data = fetch_data_from_backend()
     zone_data = live_data.get(st.session_state.selected_zone) if live_data else None
     zone_config = st.session_state.zone_configs[st.session_state.selected_zone]
@@ -101,8 +111,7 @@ def dashboard_page():
     with col1:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("📊 Live Sensor Readings")
-        if not zone_data:
-            st.warning("Awaiting live sensor data...")
+        if not zone_data: st.warning("Awaiting live sensor data...")
         else:
             m_cols = st.columns(4)
             m_cols[0].metric("🌡️ Temperature", f"{zone_data.get('temperature', 0):.1f} °C")
@@ -111,7 +120,6 @@ def dashboard_page():
             m_cols[3].metric("☀️ Weather", "Raining" if zone_data.get('is_raining') else "Clear")
         st.markdown('</div>', unsafe_allow_html=True)
     
-    # --- ERROR FIX: Only show watering control if live data is available ---
     if zone_data:
         with col2:
             st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -124,12 +132,13 @@ def dashboard_page():
                 st.success("✅ Daily water limit reached.")
             else:
                 btn_cols = st.columns(2)
-                if btn_cols[0].button("Auto", use_container_width=True, type="primary" if st.session_state.watering_mode == "Auto" else "secondary"): st.session_state.watering_mode = "Auto"
-                if btn_cols[1].button("Manual", use_container_width=True, type="primary" if st.session_state.watering_mode == "Manual" else "secondary"): st.session_state.watering_mode = "Manual"
+                if btn_cols[0].button("Auto", use_container_width=True, type="primary" if st.session_state.watering_mode == "Auto" else "secondary"): st.session_state.watering_mode = "Auto"; st.rerun()
+                if btn_cols[1].button("Manual", use_container_width=True, type="primary" if st.session_state.watering_mode == "Manual" else "secondary"): st.session_state.watering_mode = "Manual"; st.rerun()
 
                 amount = 0
                 if st.session_state.watering_mode == "Manual":
-                    amount = st.number_input("Amount (L)", 0.0, remaining, min(1.0, remaining), 0.5)
+                    # --- ERROR FIX: Replaced number_input with slider ---
+                    amount = st.slider("Amount to water (L)", min_value=0.0, max_value=remaining, value=min(1.0, remaining), step=0.5)
                 else:
                     target = zone_config['target_moisture']
                     current = zone_data.get('soil_moisture', target)
@@ -168,16 +177,15 @@ def profile_page():
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- 6. NAVIGATION & PAGE ROUTER ---
-title_col, nav_col = st.columns([2, 3])
-with title_col: st.markdown('<h1 class="main-header">🌿 AgroSmart</h1>', unsafe_allow_html=True)
-with nav_col:
-    st.write(""); st.write("") # Vertical spacer
-    pages = ["Dashboard", "Crops", "Profile"]
-    icons = ["🏠", "🌱", "👤"]
-    nav_cols = st.columns(3)
-    for i, page in enumerate(pages):
-        if nav_cols[i].button(f"{icons[i]} {page}", use_container_width=True):
-            st.session_state.current_page = page; st.rerun()
+st.markdown('<h1 class="main-header">🌿 AgroSmart</h1>', unsafe_allow_html=True)
+
+# --- Navigation now below the header ---
+nav_cols = st.columns(3)
+pages = ["Dashboard", "Crops", "Profile"]
+icons = ["🏠", "🌱", "👤"]
+for i, page in enumerate(pages):
+    if nav_cols[i].button(f"{icons[i]} {page}", use_container_width=True):
+        st.session_state.current_page = page; st.rerun()
 
 st.markdown("---")
 
