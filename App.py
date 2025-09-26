@@ -195,4 +195,17 @@ for i, zone_name in enumerate(st.session_state.zone_data):
 # --- CROP KNOWLEDGE BASE ---
 st.markdown("---")
 st.header("📚 Crop Knowledge Base")
-selected_crop = st.selectbox("Select a crop to learn more:", CROP_OPTIONS, index=0
+selected_crop = st.selectbox("Select a crop to learn more:", CROP_OPTIONS, index=0)
+
+if selected_crop:
+    info = CROP_KNOWLEDGE[selected_crop]
+    col_img, col_text = st.columns([1, 2])
+    with col_img:
+        st.image(info['image_url'], caption=selected_crop, use_container_width=True)
+    with col_text:
+        st.markdown(f"### {selected_crop}")
+        st.markdown(f"**Temperature Range:** {info['temp_range'][0]}°C - {info['temp_range'][1]}°C")
+        st.markdown(f"**Humidity Range:** {info['humidity_range'][0]}% - {info['humidity_range'][1]}%")
+        st.markdown(f"**Water Needs:** {info['water_needs']}")
+        st.markdown(f"**Soil Type:** {info['soil_type']}")
+        st.markdown(f"**Description:** {info['description']}")
