@@ -1,211 +1,111 @@
 import streamlit as st
 import requests
+import time
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(
-    page_title="🌿 AgroSmart Dashboard",
+    page_title="AgroSmart Dashboard",
     page_icon="🌿",
     layout="wide"
 )
 
-BACKEND_URL = "https://agrosmart-flask-backend.onrender.com"
+# --- IMPORTANT: Set this to your deployed Flask backend URL ---
+BACKEND_URL = "https://agrosmartback.onrender.com/api/data"
 
-# --- CSS STYLING ---
-st.markdown("""
-<style>
-.stApp {
-    background: linear-gradient(to right, #eafaf3, #ffffff);
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-}
-.zone-card {
-    background: white;
-    border-radius: 15px;
-    padding: 20px;
-    margin-bottom: 15px;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-    transition: transform 0.2s;
-}
-.zone-card:hover {
-    transform: translateY(-5px);
-}
-.circular-progress {
-    width: 100px;
-    height: 100px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin: 0 auto;
-    position: relative;
-    background: conic-gradient(#4caf50 0%, #e0e0e0 0%);
-    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-}
-.circular-progress::before {
-    content: "";
-    width: 80px;
-    height: 80px;
-    border-radius: 50%;
-    background: white;
-    position: absolute;
-}
-.progress-value {
-    position: relative;
-    font-size: 1.2rem;
-    font-weight: bold;
-    color: #2e7d32;
-}
-.progress-label {
-    text-align: center;
-    margin-top: 5px;
-    font-weight: bold;
-    color: #555;
-}
-.water-alert {
-    background: #fff3e0;
-    border-left: 4px solid #ff9800;
-    color: #e65100;
-    padding: 10px;
-    border-radius: 8px;
-    margin-top: 10px;
-    font-weight: bold;
-}
-</style>
-""", unsafe_allow_html=True)
+# --- 2. DATA FETCHING ---
+def fetch_data_from_backend():
+    """Fetches the latest sensor data from the Flask backend."""
+    try:
+        response = requests.get(BACKEND_URL, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            st.toast(f"Error from backend: Status Code {response.status_code}", icon="⚠️")
+            return None
+    except requests.exceptions.RequestException as e:
+        st.toast(f"Failed to connect to backend: {e}", icon="❌")
+        return None
 
-# --- SESSION STATE ---
+# --- 3. SESSION STATE INITIALIZATION ---
 if 'zone_data' not in st.session_state:
-    st.session_state.zone_data = {
-        f"Zone {i}": {
-            'crop': 'Large Cardamom',
-            'target_moisture': 55,
-            'soil_moisture': 0,
-            'temperature': 0,
-            'humidity': 0,
-        } for i in range(1, 5)
-    }
+    st.session_state.zone_data = {} # Start with empty data
 
-# --- CROP KNOWLEDGE ---
+# --- 4. CROP KNOWLEDGE BASE ---
 CROP_KNOWLEDGE = {
     'Large Cardamom': {
-        'temp_range': (18, 28),
-        'humidity_range': (70, 85),
-        'description': "Large cardamom is a spice with a strong, aromatic, and smoky flavor. Thrives in humid, subtropical climates with well-drained soil and partial shade. Used in Indian and Nepalese cuisine.",
-        'water_needs': "Moderate to high, consistently moist soil.",
-        'soil_type': "Well-drained, rich in organic matter.",
-        'image_url': "https://masalaboxco.com/cdn/shop/files/2_62858b80-ebe4-431e-9454-b103a07bb5ae.png?v=1702990394&width=1445"
+        'temp_range': (18, 28), 'humidity_range': (70, 85),
+        'image_url': "https://masalaboxco.com/cdn/shop/files/2_62858b80-ebe4-431e-9454-b103a07bb5ae.png?v=1702990394"
     },
     'Ginger': {
-        'temp_range': (20, 30),
-        'humidity_range': (60, 75),
-        'description': "Ginger is a flowering plant whose rhizome is widely used as a spice and folk medicine. Prefers warm, humid climates with rich, moist soil.",
-        'water_needs': "Regular watering, avoid waterlogging.",
-        'soil_type': "Rich, loamy, well-drained soil.",
-        'image_url': "https://organicmandya.com/cdn/shop/files/Ginger.jpg?v=1757079802&width=1000"
+        'temp_range': (20, 30), 'humidity_range': (60, 75),
+        'image_url': "https://www.nature-and-garden.com/wp-content/uploads/2021/05/ginger-planting.jpg"
     },
     'Mandarin Orange': {
-        'temp_range': (22, 32),
-        'humidity_range': (50, 70),
-        'description': "Mandarin oranges are small, sweet citrus fruits. Grow best in warm, sunny climates with well-drained soil. Requires consistent watering during fruit development.",
-        'water_needs': "Regular watering during fruiting.",
-        'soil_type': "Well-drained, slightly acidic soil.",
-        'image_url': "https://www.stylecraze.com/wp-content/uploads/2013/11/845_14-Amazing-Benefits-Of-Mandarin-Oranges-For-Skin-Hair-And-Health_shutterstock_116644108_1200px.jpg.webp"
+        'temp_range': (22, 32), 'humidity_range': (50, 70),
+        'image_url': "https://www.gardeningknowhow.com/wp-content/uploads/2023/04/mandarin-oranges-on-a-tree.jpg"
     },
+    # Default values for when a crop is not assigned
+    'Unknown': {
+        'temp_range': (0, 100), 'humidity_range': (0, 100), 'image_url': None
+    }
 }
 
-CROP_OPTIONS = list(CROP_KNOWLEDGE.keys())
+# --- 5. UI COMPONENTS ---
+def home_page():
+    st.header("🌿 Real-Time Farm Status")
+    
+    if not st.session_state.zone_data:
+        st.warning("Awaiting first data transmission from sensors. Please wait...")
+        st.info("If this message persists, please check if your ESP32 sensors are online and the backend is running.")
+        return
 
-# --- FETCH DATA FROM BACKEND ---
-def fetch_data():
-    try:
-        res = requests.get(f"{BACKEND_URL}/zones", timeout=5)
-        res.raise_for_status()
-        data = res.json()
-        for zone_name, values in data.items():
-            st.session_state.zone_data[zone_name]['soil_moisture'] = values.get('soil_moisture', 0)
-            st.session_state.zone_data[zone_name]['temperature'] = values.get('temperature', 0)
-            st.session_state.zone_data[zone_name]['humidity'] = values.get('humidity', 0)
-        return True
-    except:
-        st.warning("⚠ Could not fetch live sensor data.")
-        return False
+    # Dynamically create columns for each zone found in the data
+    zones = sorted(st.session_state.zone_data.keys())
+    cols = st.columns(len(zones) or 1)
 
-# --- HEADER ---
-st.title("🌿 AgroSmart Live Dashboard")
-st.markdown("Monitor and control your farm's irrigation zones in real-time.")
+    for i, zone_name in enumerate(zones):
+        zone_info = st.session_state.zone_data[zone_name]
+        with cols[i]:
+            st.subheader(zone_name)
+            st.metric("🌡️ Temperature", f"{zone_info.get('temperature', 0):.1f} °C")
+            st.metric("💧 Humidity", f"{zone_info.get('humidity', 0):.1f} %")
+            st.metric("🌱 Soil Moisture", f"{zone_info.get('soil_moisture', 0):.1f} %")
+            
+            rain_status = "Raining" if zone_info.get('is_raining') else "Clear"
+            pump_status = "ON" if zone_info.get('pump_activated') else "OFF"
+            
+            st.info(f"Weather: {rain_status} 🌧️" if rain_status == "Raining" else f"Weather: {rain_status} ☀️")
+            st.success(f"Pump: {pump_status} 🟢" if pump_status == "ON" else f"Pump: {pump_status} 🔴")
+            
+            # Display last update time
+            timestamp = zone_info.get('timestamp')
+            if timestamp:
+                st.caption(f"Last updated: {timestamp}")
 
-# --- SIDEBAR: CROP ASSIGNMENT & TARGETS ---
+# --- 6. MAIN APP LOGIC ---
+st.title("AgroSmart Monitoring Dashboard")
+
+# --- Sidebar for Refresh Control ---
 with st.sidebar:
-    st.header("⚙️ Farm Settings")
-    st.subheader("Assign Crop to Each Zone")
-    for zone_name in st.session_state.zone_data:
-        st.session_state.zone_data[zone_name]['crop'] = st.selectbox(
-            f"{zone_name} Crop", CROP_OPTIONS, 
-            index=CROP_OPTIONS.index(st.session_state.zone_data[zone_name]['crop']),
-            key=f"crop_{zone_name}"
-        )
-    st.markdown("---")
-    st.subheader("Set Target Soil Moisture")
-    for zone_name in st.session_state.zone_data:
-        st.session_state.zone_data[zone_name]['target_moisture'] = st.slider(
-            f"{zone_name} Target Moisture", 0, 100,
-            st.session_state.zone_data[zone_name]['target_moisture'], key=f"target_{zone_name}"
-        )
-    st.markdown("---")
-    if st.button("🔄 Refresh Sensor Data", use_container_width=True):
-        fetch_data()
+    st.header("Controls")
+    if st.button("🔄 Refresh Data Now"):
+        new_data = fetch_data_from_backend()
+        if new_data:
+            st.session_state.zone_data = new_data
+        st.rerun()
 
-# --- MAIN DASHBOARD ---
-st.header("Irrigation Zone Overview")
+    auto_refresh = st.toggle("Auto-refresh every 30s", value=True)
 
-cols = st.columns(4)
-for i, zone_name in enumerate(st.session_state.zone_data):
-    data = st.session_state.zone_data[zone_name]
-    with cols[i]:
-        st.markdown(f"<div class='zone-card'>", unsafe_allow_html=True)
-        st.subheader(zone_name)
-        st.markdown(f"**Crop:** {data['crop']}")
-        st.markdown(f"**Target Moisture:** {data['target_moisture']}%")
 
-        # Circular progress bars
-        st.markdown(f"""
-        <div class="circular-progress" style="background: conic-gradient(#ff9800 {min(100, data['temperature'])}%, #e0e0e0 0%);">
-            <div class="progress-value">{data['temperature']}°C</div>
-        </div>
-        <div class="progress-label">Temperature</div>
-        """, unsafe_allow_html=True)
+# Fetch new data and update session state
+new_data = fetch_data_from_backend()
+if new_data:
+    st.session_state.zone_data = new_data
 
-        st.markdown(f"""
-        <div class="circular-progress" style="background: conic-gradient(#2196f3 {min(100, data['humidity'])}%, #e0e0e0 0%);">
-            <div class="progress-value">{data['humidity']}%</div>
-        </div>
-        <div class="progress-label">Humidity</div>
-        """, unsafe_allow_html=True)
+# Display the main page
+home_page()
 
-        st.markdown(f"""
-        <div class="circular-progress" style="background: conic-gradient(#4caf50 {min(100, data['soil_moisture'])}%, #e0e0e0 0%);">
-            <div class="progress-value">{data['soil_moisture']}%</div>
-        </div>
-        <div class="progress-label">Soil Moisture</div>
-        """, unsafe_allow_html=True)
-
-        if data['soil_moisture'] < data['target_moisture']:
-            st.markdown("<div class='water-alert'>⚠ Water Needed!</div>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-# --- CROP KNOWLEDGE BASE ---
-st.markdown("---")
-st.header("📚 Crop Knowledge Base")
-selected_crop = st.selectbox("Select a crop to learn more:", CROP_OPTIONS, index=0)
-
-if selected_crop:
-    info = CROP_KNOWLEDGE[selected_crop]
-    col_img, col_text = st.columns([1, 2])
-    with col_img:
-        st.image(info['image_url'], caption=selected_crop, use_container_width=True)
-    with col_text:
-        st.markdown(f"### {selected_crop}")
-        st.markdown(f"**Temperature Range:** {info['temp_range'][0]}°C - {info['temp_range'][1]}°C")
-        st.markdown(f"**Humidity Range:** {info['humidity_range'][0]}% - {info['humidity_range'][1]}%")
-        st.markdown(f"**Water Needs:** {info['water_needs']}")
-        st.markdown(f"**Soil Type:** {info['soil_type']}")
-        st.markdown(f"**Description:** {info['description']}")
+# Logic for auto-refresh
+if auto_refresh:
+    time.sleep(30)
+    st.rerun()
