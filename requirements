@@ -1,9 +1,1 @@
-# For the Streamlit Frontend
-streamlit
-requests
 
-# For the FastAPI Backend
-fastapi
-uvicorn[standard]
-SQLAlchemy
-pydantic
