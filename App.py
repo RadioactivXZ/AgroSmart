@@ -1,162 +1,237 @@
 import streamlit as st
 import requests
-import pandas as pd
-import plotly.graph_objects as go
-from datetime import datetime
-import time
-import os
 
-# Page configuration
+# --- 1. CONFIGURATION ---
 st.set_page_config(
     page_title="AgroSmart Dashboard",
-    page_icon="🌱",
+    page_icon="🌿",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# --- FINAL BACKEND URL ---
-# Updated with the link you provided.
-BACKEND_URL = "https://agrosmart-flask-backend.onrender.com"
+# URL of your hosted backend API
+BACKEND_URL = "https://agrosmartback.onrender.com"
 
-# --- CROP INFORMATION ---
-CROP_INFO = {
-    "Tomato": { "image_url": "https://images.unsplash.com/photo-1546470427-5c8b0b0b0b0b?w=300", "temp_range": [18, 25], "humidity_range": [60, 80], "description": "Tomatoes require consistent moisture and warm temperatures." },
-    "Lettuce": { "image_url": "https://images.unsplash.com/photo-1556801712-76c8eb07bbc9?w=300", "temp_range": [15, 20], "humidity_range": [70, 85], "description": "Lettuce prefers cool temperatures and high humidity." },
-    "Pepper": { "image_url": "https://images.unsplash.com/photo-1518977676601-b53f82aba655?w=300", "temp_range": [20, 30], "humidity_range": [50, 70], "description": "Peppers thrive in warm conditions with moderate humidity." },
-    "Cucumber": { "image_url": "https://images.unsplash.com/photo-1449300079323-02e209d9d3a6?w=300", "temp_range": [18, 24], "humidity_range": [60, 75], "description": "Cucumbers need consistent moisture and moderate temperatures." }
-}
+# --- Custom CSS for Aesthetic Styling ---
+st.markdown(
+    """
+    <style>
+    .stApp {
+        background: linear-gradient(to bottom right, #f0f8f0, #e0f0e0);
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    .header-container {
+        background: linear-gradient(to right, #2e7d32, #4caf50);
+        padding: 1rem;
+        border-radius: 10px;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        color: white;
+    }
+    .zone-button {
+        flex: 1;
+        margin: 0 5px;
+        padding: 15px 10px;
+        border-radius: 15px;
+        background: linear-gradient(to bottom, #ffffff, #f5f5f5);
+        border: 2px solid #4caf50;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        font-weight: bold;
+        color: #2e7d32;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .zone-button.active {
+        background: linear-gradient(to bottom, #4caf50, #2e7d32);
+        color: white;
+        border-color: #1b5e20;
+    }
+    .circular-progress {
+        width: 120px;
+        height: 120px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto;
+        position: relative;
+        background: conic-gradient(#4caf50 0%, #e0e0e0 0%);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    .circular-progress::before {
+        content: "";
+        width: 100px;
+        height: 100px;
+        border-radius: 50%;
+        background: white;
+        position: absolute;
+    }
+    .progress-value {
+        position: relative;
+        font-size: 1.5rem;
+        font-weight: bold;
+        color: #2e7d32;
+    }
+    .progress-label {
+        text-align: center;
+        margin-top: 10px;
+        font-weight: bold;
+        color: #555;
+    }
+    .water-control {
+        background: white;
+        border-radius: 15px;
+        padding: 20px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        margin: 20px 0;
+        border-left: 5px solid #4caf50;
+    }
+    .crop-card {
+        background: white;
+        border-radius: 10px;
+        padding: 15px;
+        margin: 10px 0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        border-left: 4px solid #4caf50;
+    }
+    .notification {
+        padding: 10px 15px;
+        border-radius: 8px;
+        margin: 10px 0;
+        font-weight: bold;
+    }
+    .notification.warning {
+        background: #fff3e0;
+        border-left: 4px solid #ff9800;
+        color: #e65100;
+    }
+    .notification.success {
+        background: #e8f5e9;
+        border-left: 4px solid #4caf50;
+        color: #2e7d32;
+    }
+    .notification.info {
+        background: #e3f2fd;
+        border-left: 4px solid #2196f3;
+        color: #0d47a1;
+    }
+    .login-container {
+        max-width: 400px;
+        margin: 100px auto;
+        padding: 30px;
+        background: white;
+        border-radius: 15px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
-# --- API HELPER FUNCTIONS ---
-def fetch_data_from_backend():
-    """Fetch latest data for all zones from the backend API"""
+# --- 2. SESSION STATE ---
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+if 'current_zone' not in st.session_state:
+    st.session_state.current_zone = "Zone 1"
+if 'zone_data' not in st.session_state:
+    st.session_state.zone_data = {}
+
+# --- 3. API CALL TO BACKEND ---
+def fetch_zone_data():
     try:
-        response = requests.get(f"{BACKEND_URL}/api/data", timeout=15)
-        response.raise_for_status() # Raises an exception for 4xx/5xx errors
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"Failed to connect to backend: {e}")
-        return None
+        res = requests.get(f"{BACKEND_URL}/zones", timeout=5)
+        if res.status_code == 200:
+            st.session_state.zone_data = res.json()
+        else:
+            st.error("Failed to fetch data from backend.")
+    except Exception as e:
+        st.error(f"Error connecting to backend: {e}")
 
-def fetch_zone_history(zone_id):
-    """Fetch historical data for a specific zone"""
-    try:
-        response = requests.get(f"{BACKEND_URL}/api/data/{zone_id}", timeout=15)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"Failed to fetch history for Zone {zone_id}: {e}")
-        return None
-
-def manual_pump_control(zone_id, action):
-    """Send manual pump control command to the backend"""
-    try:
-        response = requests.post(f"{BACKEND_URL}/api/pump/{zone_id}", json={"action": action}, timeout=15)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"Failed to send pump command: {e}")
-        return None
-
-# --- SIDEBAR ---
-st.sidebar.header("Crop Information")
-selected_crop = st.sidebar.selectbox("Select Crop Type", list(CROP_INFO.keys()))
-
-if selected_crop:
-    info = CROP_INFO[selected_crop]
-    st.sidebar.image(info['image_url'], caption=selected_crop, use_container_width=True)
-    st.sidebar.write(f"**Ideal Temp:** {info['temp_range'][0]}°C - {info['temp_range'][1]}°C")
-    st.sidebar.write(f"**Ideal Humidity:** {info['humidity_range'][0]}% - {info['humidity_range'][1]}%")
-    st.sidebar.info(info['description'])
-
-st.sidebar.markdown("---")
-# Manual refresh button is more reliable than auto-refresh with st.rerun()
-if st.sidebar.button("🔄 Refresh Data", use_container_width=True):
-    st.experimental_rerun()
-
-
-# --- MAIN DASHBOARD ---
-st.title("🌱 AgroSmart Farm Monitoring Dashboard")
-
-# Fetch and display data
-data = fetch_data_from_backend()
-
-if data:
-    # Create columns for each zone
-    cols = st.columns(4)
-    
-    for i, (zone_key, zone_data) in enumerate(data.items()):
-        with cols[i]:
-            zone_id = zone_data['zone_id']
-            st.subheader(f"Zone {zone_id}")
-            
-            # Display sensor readings
-            st.metric("🌡 Temperature", f"{zone_data['temperature']:.1f}°C")
-            st.metric("💧 Soil Moisture", f"{zone_data['soil_moisture']:.1f}%")
-            st.metric("💨 Humidity", f"{zone_data['humidity']:.1f}%")
-            rain_status = "🌧 Raining" if zone_data['is_raining'] else "☀️ Clear"
-            st.metric("Weather", rain_status)
-            
-            # Pump status and control
-            st.write("---")
-            st.write("**Pump Control**")
-            
-            col_on, col_off = st.columns(2)
-            if col_on.button("ON", key=f"pump_on_{zone_id}", use_container_width=True):
-                if manual_pump_control(zone_id, "on"):
-                    st.success("Pump turned ON")
-                    time.sleep(1) # Brief pause to show message
-                    st.experimental_rerun()
-            
-            if col_off.button("OFF", key=f"pump_off_{zone_id}", use_container_width=True):
-                if manual_pump_control(zone_id, "off"):
-                    st.success("Pump turned OFF")
-                    time.sleep(1)
-                    st.experimental_rerun()
-            
-            last_update = datetime.fromisoformat(zone_data['timestamp'])
-            st.caption(f"Last update: {last_update.strftime('%H:%M:%S')}")
-
-    # --- Historical data charts ---
-    st.markdown("---")
-    st.header("📊 Historical Data")
-    
-    selected_zone_for_history = st.selectbox("Select Zone for Detailed View", [1, 2, 3, 4])
-    
-    if st.button("📈 Load Historical Data", key="load_history"):
-        with st.spinner(f"Loading data for Zone {selected_zone_for_history}..."):
-            history_data = fetch_zone_history(selected_zone_for_history)
-            
-            if history_data:
-                df = pd.DataFrame(history_data)
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                
-                # Create charts
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df['timestamp'], y=df['temperature'], mode='lines+markers', name='Temperature (°C)', line=dict(color='red')))
-                fig.add_trace(go.Scatter(x=df['timestamp'], y=df['humidity'], mode='lines+markers', name='Humidity (%)', line=dict(color='blue'), yaxis='y2'))
-                fig.add_trace(go.Scatter(x=df['timestamp'], y=df['soil_moisture'], mode='lines+markers', name='Soil Moisture (%)', line=dict(color='green'), yaxis='y3'))
-                
-                fig.update_layout(
-                    title=f'Zone {selected_zone_for_history} - Sensor Readings (Last 24h)',
-                    xaxis_title='Time',
-                    yaxis=dict(title='Temperature (°C)', side='left'),
-                    yaxis2=dict(title='Humidity (%)', side='right', overlaying='y'),
-                    yaxis3=dict(title='Soil Moisture (%)', side='right', overlaying='y', position=0.95),
-                    hovermode='x unified'
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                st.subheader("Raw Data")
-                st.dataframe(df[['timestamp', 'temperature', 'humidity', 'soil_moisture', 'is_raining', 'pump_activated']])
+# --- 4. LOGIN PAGE ---
+def login_page():
+    st.markdown(
+        """
+        <div class="login-container">
+            <h2 style="text-align: center; color: #2e7d32;">🌿 AgroSmart Login</h2>
+            <p style="text-align: center; color: #666;">Access your farm dashboard</p>
+        </div>
+        """, unsafe_allow_html=True
+    )
+    with st.form("login_form"):
+        phone = st.text_input("Phone Number", placeholder="Enter your phone number")
+        password = st.text_input("Password", type="password", placeholder="Enter your password")
+        submit = st.form_submit_button("Login", use_container_width=True)
+        if submit:
+            if phone and password:
+                st.session_state.logged_in = True
+                fetch_zone_data()
+                st.rerun()
             else:
-                st.error("No historical data available for this zone.")
+                st.error("Please enter both phone number and password")
 
+# --- 5. HOME PAGE ---
+def home_page():
+    if not st.session_state.zone_data:
+        fetch_zone_data()
+
+    st.markdown("<h2>Irrigation Zones</h2>", unsafe_allow_html=True)
+    cols = st.columns(4)
+
+    for i, col in enumerate(cols):
+        zone_name = f"Zone {i+1}"
+        if zone_name not in st.session_state.zone_data:
+            continue
+        zone_data = st.session_state.zone_data[zone_name]
+        button_class = "active" if zone_name == st.session_state.current_zone else ""
+        status_color = "#ff9800" if zone_data['water_needed'] else "#4caf50"
+
+        with col:
+            if st.button(f"{zone_name}\n{zone_data['status']}", key=zone_name):
+                st.session_state.current_zone = zone_name
+
+    st.markdown("---")
+    if st.session_state.current_zone not in st.session_state.zone_data:
+        st.warning("No data for this zone.")
+        return
+
+    zone_data = st.session_state.zone_data[st.session_state.current_zone]
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        st.markdown(f"### {st.session_state.current_zone} - {zone_data['crop']}")
+        prog_col1, prog_col2, prog_col3 = st.columns(3)
+
+        with prog_col1:
+            temp_percent = min(100, (zone_data['temperature'] / 40) * 100)
+            st.markdown(f"<div class='circular-progress' style='background: conic-gradient(#ff9800 {temp_percent}%, #e0e0e0 0%);'><div class='progress-value'>{zone_data['temperature']}°C</div></div><div class='progress-label'>Temperature</div>", unsafe_allow_html=True)
+        with prog_col2:
+            st.markdown(f"<div class='circular-progress' style='background: conic-gradient(#2196f3 {zone_data['humidity']}%, #e0e0e0 0%);'><div class='progress-value'>{zone_data['humidity']}%</div></div><div class='progress-label'>Humidity</div>", unsafe_allow_html=True)
+        with prog_col3:
+            st.markdown(f"<div class='circular-progress' style='background: conic-gradient(#4caf50 {zone_data['soil_moisture']}%, #e0e0e0 0%);'><div class='progress-value'>{zone_data['soil_moisture']}%</div></div><div class='progress-label'>Soil Moisture</div>", unsafe_allow_html=True)
+
+    with col2:
+        st.markdown("### Water Control")
+        auto_water = st.checkbox("Automatic Watering", value=not zone_data['water_needed'])
+        if st.button("💧 Water Now", use_container_width=True):
+            try:
+                res = requests.post(f"{BACKEND_URL}/zones/{st.session_state.current_zone}/water", json={"auto": auto_water})
+                if res.status_code == 200:
+                    st.success("Watering action sent successfully!")
+                    fetch_zone_data()
+                else:
+                    st.error("Failed to send watering command.")
+            except Exception as e:
+                st.error(f"Error sending water command: {e}")
+
+# --- 6. MAIN DASHBOARD ---
+def main_dashboard():
+    st.markdown("<h1 style='color: #2e7d32;'>🌿 AgroSmart</h1>", unsafe_allow_html=True)
+    st.markdown("---")
+    home_page()
+
+# --- 7. MAIN APP LOGIC ---
+if not st.session_state.logged_in:
+    login_page()
 else:
-    st.error("❌ Failed to load data from backend.")
-    st.info("Please wait a moment for the backend to start, or check the URL and your connection.")
-
-# --- Footer ---
-st.markdown("---")
-st.markdown("*AgroSmart Farm Monitoring System*")
-
+    main_dashboard()
